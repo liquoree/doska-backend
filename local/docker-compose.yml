@@ -1,0 +1,10 @@
+services:
+  db:
+    image: postgres:16
+    container_name: doska_db
+    environment:
+      POSTGRES_USER: liquoree
+      POSTGRES_PASSWORD: liqrr2511
+      POSTGRES_DB: doska_db
+    network_mode: host
+    restart: unless-stopped
