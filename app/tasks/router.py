@@ -1,13 +1,15 @@
 import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from app.auth import get_current_user
 from app.database import get_session
 from app.models import Board, Task, TaskResponsible, User, UserProject
+from app.email import send_responsible_email
+
 
 router = APIRouter(prefix="/projects/{project_id}/tasks", tags=["tasks"])
 
@@ -30,6 +32,7 @@ class TaskResponse(BaseModel):
     boardId: str
     createdAt: str
     responsibleIds: List[str]
+    position: int
 
 
 class CreateTaskRequest(BaseModel):
@@ -40,6 +43,8 @@ class CreateTaskRequest(BaseModel):
 class UpdateTaskRequest(BaseModel):
     title: Optional[str] = None
     is_completed: Optional[bool] = None
+    board_id: Optional[uuid.UUID] = None
+    position: Optional[int] = None
 
 
 def _task_to_response(task: Task, session: Session) -> TaskResponse:
@@ -53,8 +58,8 @@ def _task_to_response(task: Task, session: Session) -> TaskResponse:
         boardId=str(task.board_id),
         createdAt=task.created_at.isoformat(),
         responsibleIds=[str(r.user_id) for r in responsibles],
+        position=task.position,
     )
-
 
 @router.get("", response_model=List[TaskResponse])
 def get_tasks(
@@ -107,6 +112,14 @@ def update_task(
         task.title = body.title
     if body.is_completed is not None:
         task.is_completed = body.is_completed
+    if body.board_id is not None:
+        # проверяем что доска принадлежит этому проекту
+        board = session.get(Board, body.board_id)
+        if not board or board.project_id != project_id:
+            raise HTTPException(status_code=404, detail="Board not found")
+        task.board_id = body.board_id
+    if body.position is not None:
+        task.position = body.position
 
     session.add(task)
     session.commit()
@@ -129,19 +142,22 @@ def delete_task(
     responsibles = session.exec(
         select(TaskResponsible).where(TaskResponsible.task_id == task_id)
     ).all()
+
     for r in responsibles:
         session.delete(r)
+
+    session.flush()  # сначала удаляем task_responsible из бд
 
     session.delete(task)
     session.commit()
     return {"ok": True}
-
 
 @router.post("/{task_id}/responsible/{user_id}", response_model=TaskResponse)
 def add_responsible(
     project_id: uuid.UUID,
     task_id: uuid.UUID,
     user_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
@@ -161,6 +177,10 @@ def add_responsible(
     if not existing:
         session.add(TaskResponsible(task_id=task_id, user_id=user_id))
         session.commit()
+
+        user = session.get(User, user_id)
+        if user and user.email:
+            background_tasks.add_task(send_responsible_email, user.email, task.title)
 
     return _task_to_response(task, session)
 

@@ -57,3 +57,4 @@ class Task(SQLModel, table=True):
     is_completed: bool = False
     board_id: uuid.UUID = Field(foreign_key="board.id")
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    position: int = Field(default=0)

@@ -71,14 +71,25 @@ def delete_board(
     if not board or board.project_id != project_id:
         raise HTTPException(status_code=404, detail="Board not found")
 
-    # Delete tasks and their responsibles
     tasks = session.exec(select(Task).where(Task.board_id == board_id)).all()
+
+    # сначала удаляем всех ответственных
     for task in tasks:
-        responsibles = session.exec(select(TaskResponsible).where(TaskResponsible.task_id == task.id)).all()
+        responsibles = session.exec(
+            select(TaskResponsible).where(TaskResponsible.task_id == task.id)
+        ).all()
         for r in responsibles:
             session.delete(r)
+
+    session.flush()
+
+    # потом удаляем задачи
+    for task in tasks:
         session.delete(task)
 
+    session.flush()
+
+    # потом удаляем доску
     session.delete(board)
     session.commit()
     return {"ok": True}
